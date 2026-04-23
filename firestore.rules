@@ -1,0 +1,66 @@
+// firestore.rules
+// Deploy with: firebase deploy --only firestore:rules
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+  return isSignedIn() && (
+    exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+    (
+      exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+    )
+  );
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow create: if isSignedIn() && isOwner(userId);
+      allow update: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // Admins collection
+    match /admins/{adminId} {
+      allow read: if isAdmin();
+      allow write: if false; // Only via Admin SDK / seed script
+    }
+
+    // Products collection
+    match /products/{productId} {
+      allow read: if true; // Public read for product catalog
+      allow write: if isAdmin();
+    }
+
+    // Orders collection
+    match /orders/{orderId} {
+      // Customer can read their own orders
+      allow read: if isSignedIn() && (
+        resource.data.customerId == request.auth.uid || isAdmin()
+      );
+
+      // Customer can create orders
+      allow create: if isSignedIn() &&
+        request.resource.data.customerId == request.auth.uid &&
+        request.resource.data.productTotal is number &&
+        request.resource.data.items.size() > 0;
+
+      // Only admin can update orders (status, payment, etc.)
+      allow update: if isAdmin();
+
+      allow delete: if isAdmin();
+    }
+  }
+}
