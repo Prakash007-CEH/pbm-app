@@ -13,15 +13,23 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [attempts, setAttempts] = useState(0);
+  const [blockedUntil, setBlockedUntil] = useState(null);
   const { login } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
   e.preventDefault();
+  if (blockedUntil && Date.now() < blockedUntil) {
+  const remaining = Math.ceil((blockedUntil - Date.now()) / 60000);
+  return toast.error(`Account locked. Try again in ${remaining} min`);
+}
   if (!email || !password) return toast.error('Please fill all fields');
   setLoading(true);
   try {
     await login(email, password);
+    setAttempts(0);
+    setBlockedUntil(null);
     // Role check — userData is set inside login via useAuth
     // Give Firestore a moment to resolve userData via onAuthStateChanged
     // We read role from Firestore directly after login
@@ -46,7 +54,17 @@ export default function Login() {
       await signOut(auth);
     }
   } catch (err) {
-    toast.error('Invalid email or password');
+    const newAttempts = attempts + 1;
+  setAttempts(newAttempts);
+
+  if (newAttempts >= 3) {
+    setBlockedUntil(Date.now() + 10 * 60 * 1000);
+    setLoading(false);
+    setAttempts(0);
+    toast.error('Too many failed attempts. Account locked for 10 minutes.');
+  } else {
+    toast.error(`Invalid email or password. ${3 - newAttempts} attempts left.`);
+  }
   } finally {
     setLoading(false);
   }
