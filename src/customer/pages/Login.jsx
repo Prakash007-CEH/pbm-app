@@ -1,6 +1,7 @@
 // src/customer/pages/Login.jsx
 import { sendPasswordResetEmail } from 'firebase/auth';
-import { auth } from '../../firebase/config';
+import { auth, db } from '../../firebase/config';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import logo from '../../assets/logo.png';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -13,26 +14,35 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [attempts, setAttempts] = useState(0);
-  const [blockedUntil, setBlockedUntil] = useState(null);
+
   const { login } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
   e.preventDefault();
-  if (blockedUntil && Date.now() < blockedUntil) {
-  const remaining = Math.ceil((blockedUntil - Date.now()) / 60000);
-  return toast.error(`Account locked. Try again in ${remaining} min`);
-}
   if (!email || !password) return toast.error('Please fill all fields');
+  const cleanEmail = email.toLowerCase().trim();
+  const attemptRef = doc(db, "loginAttempts", cleanEmail);
+  let attemptSnap = await getDoc(attemptRef);
+
+  if (attemptSnap.exists()) {
+    const data = attemptSnap.data();
+
+    if (data.blockedUntil && Date.now() < data.blockedUntil) {
+      const remaining = Math.ceil((data.blockedUntil - Date.now()) / 60000);
+      return toast.error(`Account locked. Try again in ${remaining} min`);
+    }
+  }
+
+  
   setLoading(true);
   try {
-    await login(email, password);
-    setAttempts(0);
-    setBlockedUntil(null);
-    // Role check — userData is set inside login via useAuth
-    // Give Firestore a moment to resolve userData via onAuthStateChanged
-    // We read role from Firestore directly after login
+    await login(cleanEmail, password);
+    await setDoc(attemptRef, {
+    attempts: 0,
+    blockedUntil: 0,
+  });
+  
     const { getDoc, doc } = await import('firebase/firestore');
     const { db } = await import('../../firebase/config');
     const { auth } = await import('../../firebase/config');
@@ -54,17 +64,29 @@ export default function Login() {
       await signOut(auth);
     }
   } catch (err) {
-    const newAttempts = attempts + 1;
-  setAttempts(newAttempts);
+    let newAttempts = 1;
 
-  if (newAttempts >= 3) {
-    setBlockedUntil(Date.now() + 10 * 60 * 1000);
-    setLoading(false);
-    setAttempts(0);
-    toast.error('Too many failed attempts. Account locked for 10 minutes.');
-  } else {
-    toast.error(`Invalid email or password. ${3 - newAttempts} attempts left.`);
-  }
+   if (attemptSnap.exists()) {
+     newAttempts = (attemptSnap.data().attempts || 0) + 1;
+   }
+
+   if (newAttempts >= 3) {
+     await setDoc(attemptRef, {
+       attempts: 0,
+       blockedUntil: Date.now() + 10 * 60 * 1000,
+     });
+
+     toast.error('Too many failed attempts. Account locked for 10 minutes.');
+   } else {
+     await setDoc(attemptRef, {
+       attempts: newAttempts,
+       blockedUntil: 0,
+     });
+
+     toast.error(`Invalid email or password. ${3 - newAttempts} attempts left.`);
+   }
+
+
   } finally {
     setLoading(false);
   }
